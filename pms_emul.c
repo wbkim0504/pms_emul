@@ -36,12 +36,13 @@ typedef enum print_option_t {
 } print_option_t;
 
 int print_option = PRINT_NONE;
-
+int print_spu_id = 0;
 
 
 static unsigned int cli_count = 0;
 static int uid = 10;
 
+#define MSG_BUFF_SIZE (20480)
 
 /* Client structure */
 typedef struct {
@@ -49,6 +50,8 @@ typedef struct {
 	int connfd;			/* Connection file descriptor */
 	int uid;			/* Client unique identifier */
 	char name[32];			/* Client name */
+	unsigned char msg_buff[MSG_BUFF_SIZE];
+	unsigned int pos_curr;
 } client_t;
 
 client_t *clients[MAX_CLIENTS];
@@ -151,7 +154,14 @@ void print_client_addr(struct sockaddr_in addr){
 /* parsing command */
 void parse_command(unsigned char *buff_in, int rlen)
 {
-	char ch = buff_in[0];
+	if (rlen < 4)
+		return;
+
+	if (rlen >= 5)
+		print_spu_id = buff_in[3] - '0';
+	else
+		print_spu_id = 0;
+
 	if (!strncmp(buff_in, "quit", 4))
 	{
 		printf("\'quit\' is received : program end !");
@@ -229,99 +239,102 @@ void print_packet(unsigned char *buff, int buff_size)
 	}
 
 	char *pbuff = buff;
+	int packet_header_size = 10;
+	int spu_header_size = 9;
+	int ecu_header_size = 1;
 
 	/* mpu_header */
-	char num_SPU = pbuff[9];
-	char num_HIP = pbuff[10];
+	char num_SPU = pbuff[8];
+	char num_HIP = pbuff[9];
 
 	if (print_option == PRINT_MPU)
 	{
-		printf("MPU (%d) ... \n", pbuff[0] - 0x10);
-		print_hex(pbuff, 12);
+		printf("MPU (%d) ... \n", pbuff[6]);
+		print_hex(pbuff, packet_header_size);
 	}
 
 	/* mpu_body */
-	pbuff += 12;
+	pbuff += packet_header_size;
 
 	/* SPU */
 	for (int i=0; i<num_SPU; i++)
 	{
 		/* SPU header */
-		char spu_id = pbuff[0];
+		unsigned char spu_id = pbuff[0];
 		int spu_size = (((int) pbuff[1]) << 8) + pbuff[2];
-		char spu_version = pbuff[3];
-		char spu_err_code = pbuff[4];
 
-		char nINV = pbuff[5];
-		char nPCS = pbuff[6];
-		char nLIP = pbuff[7];
-		char nESS = pbuff[8];
-		char nPRU = pbuff[9];
+		char nINV = pbuff[4];
+		char nPCS = pbuff[5];
+		char nLIP = pbuff[6];
+		char nESS = pbuff[7];
+		char nPRU = pbuff[8];
 
 		int num_ECU = nINV + nPCS + nLIP + nESS + nPRU;
 		 
 		if (print_option == PRINT_SPU)
 		{
-			printf("SPU (%d) ... \n", spu_id - 0x20);
-			print_hex(pbuff, 12);
+			printf("SPU (%d) ... \n", spu_id);
+			print_hex(pbuff, spu_header_size);
 		}
 
-
 		/* SPU body */
-		pbuff += 12;
+		pbuff += spu_header_size;
 		for (int k=0; k<num_ECU; k++)
 		{
-			char ecu_type = pbuff[0];
-			char ecu_size = pbuff[1];
-			char ecu_version = pbuff[2];
-			char ecu_err_code = pbuff[3];
+			unsigned char ecu_data_size = pbuff[0];
+			unsigned char ecu_size = ecu_data_size + ecu_header_size;
 
-			if (print_option == PRINT_INV)
+			if ( i == print_spu_id)
 			{
-				if ((ecu_type & 0xF0) == 0x60)
+				if (print_option == PRINT_INV)
 				{
-					printf("INV (%d) ... \n", ecu_type - 0x60);
-					print_hex(pbuff, ecu_size);
+					if (k == 0)
+					{
+						printf("INV (%d) ... \n", i);
+						print_hex(pbuff, ecu_size);
+					}
+				}
+
+				if (print_option == PRINT_PCS)
+				{
+					if (k == 1)
+					{
+						printf("PCS (%d) ... \n", i);
+						print_hex(pbuff, ecu_size);
+					}
+				}
+
+				if (print_option == PRINT_LIP)
+				{
+					if (k == 2)
+					{
+						printf("LIP (%d) ... \n", i);
+						print_hex(pbuff, ecu_size);
+					}
+				}
+
+				if (print_option == PRINT_ESS)
+				{
+					int m = k - 2;
+					if ( (m > 0) && (m <= nESS) )
+					{
+						printf("ESS (%d,%d) ... \n", i,m);
+						print_hex(pbuff, ecu_size);
+					}
+				}
+
+				if (print_option == PRINT_PRU)
+				{
+					int m = k - 2 - nESS;
+					if ( (m > 0) && (m <= nPRU) )
+					{
+						printf("PRU (%d,%d) ... \n", i,m);
+						print_hex(pbuff, ecu_size);
+					}
 				}
 			}
 
-			if (print_option == PRINT_PCS)
-			{
-				if ((ecu_type & 0xF0) == 0x70)
-				{
-					printf("PCS (%d) ... \n", ecu_type - 0x70);
-					print_hex(pbuff, ecu_size);
-				}
-			}
-
-			if (print_option == PRINT_LIP)
-			{
-				if ((ecu_type & 0xF0) == 0x80)
-				{
-					printf("LIP (%d) ... \n", ecu_type - 0x80);
-					print_hex(pbuff, ecu_size);
-				}
-			}
-
-			if (print_option == PRINT_ESS)
-			{
-				if ((ecu_type & 0xF0) == 0x30)
-				{
-					printf("ESS (%d) ... \n", ecu_type - 0x30);
-					print_hex(pbuff, ecu_size);
-				}
-			}
-
-			if (print_option == PRINT_PRU)
-			{
-				if ((ecu_type & 0xF0) == 0x40)
-				{
-					printf("PRU (%d) ... \n", ecu_type - 0x40);
-					print_hex(pbuff, ecu_size);
-				}
-			}
-
-			pbuff += ecu_size;
+			pbuff += (ecu_size);
 		}
 
 	}
@@ -335,10 +348,13 @@ void print_packet(unsigned char *buff, int buff_size)
 
 // ----------------------------------------------------------------------------
 /* Handle all communication with the client */
+#define	BUFF_SIZE	(2048)
+
 void *handle_client(void *arg){
 	char buff_out[1024];
-	unsigned char buff_in[20480];
+	unsigned char buff_in[BUFF_SIZE];
 	int rlen;
+	int packet_header_size = 10;
 
 	cli_count++;
 	client_t *cli = (client_t *)arg;
@@ -357,13 +373,38 @@ void *handle_client(void *arg){
 		print_client_addr(cli->addr);
 		printf(" : %d byte data --> %c (0x%02X) \n", rlen, buff_in[0], buff_in[0]);
 
-		if (rlen < 12)
+		if (rlen < packet_header_size)
 		{
 			parse_command(buff_in, rlen);
+			continue;
+		}
+
+		if ((cli->pos_curr + rlen) < MSG_BUFF_SIZE)
+		{
+			unsigned char *pbuff = cli->msg_buff;
+			pbuff += cli->pos_curr;
+			memcpy(pbuff, buff_in, rlen);
+			cli->pos_curr += rlen;
 		}
 		else
 		{
-			print_packet(buff_in, rlen);
+			printf("packet size exceed MSG_BUFF_SIZE (%d) --> skip message \n", MSG_BUFF_SIZE);
+			cli->pos_curr = 0;
+		}
+
+		if (cli->pos_curr > packet_header_size)
+		{
+			unsigned char *p = cli->msg_buff;
+			unsigned int packet_size = (p[1] << 24) + (p[2] << 16) + (p[3] << 8) + p[4];
+			printf("packet size = %d, msg received = %d\n", packet_size, cli->pos_curr);
+
+
+			if (cli->pos_curr >= packet_size)
+			{
+				printf("print_packet \n");
+				print_packet(cli->msg_buff, packet_size);
+				cli->pos_curr = 0;
+			}
 		}
 	}
 
@@ -456,6 +497,8 @@ int main(int argc, char *argv[])
 		cli->connfd = connfd;
 		cli->uid = uid++;
 		sprintf(cli->name, "%d", cli->uid);
+		cli->pos_curr = 0;
+		memset(cli->msg_buff, 0, MSG_BUFF_SIZE);
 
 		/* Add client to the queue and fork thread */
 		queue_add(cli);
